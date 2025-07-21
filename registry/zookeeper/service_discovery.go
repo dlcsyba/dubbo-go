@@ -19,19 +19,15 @@ package zookeeper
 
 import (
 	"fmt"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
-)
 
-import (
 	gxset "github.com/dubbogo/gost/container/set"
-	gxzookeeper "github.com/dubbogo/gost/database/kv/zk"
-	gxpage "github.com/dubbogo/gost/hash/page"
-	"github.com/dubbogo/gost/log/logger"
-)
 
-import (
+	gxzookeeper "github.com/dubbogo/gost/database/kv/zk"
+
 	"dubbo.apache.org/dubbo-go/v3/common"
 	"dubbo.apache.org/dubbo-go/v3/common/constant"
 	"dubbo.apache.org/dubbo-go/v3/common/extension"
@@ -39,6 +35,8 @@ import (
 	"dubbo.apache.org/dubbo-go/v3/remoting"
 	"dubbo.apache.org/dubbo-go/v3/remoting/zookeeper"
 	"dubbo.apache.org/dubbo-go/v3/remoting/zookeeper/curator_discovery"
+	gxpage "github.com/dubbogo/gost/hash/page"
+	"github.com/dubbogo/gost/log/logger"
 )
 
 const (
@@ -181,6 +179,7 @@ func (zksd *zookeeperServiceDiscovery) GetInstances(serviceName string) []regist
 	if err != nil {
 		logger.Errorf("[zkServiceDiscovery] Could not query the instances for service{%s}, error = err{%v} ",
 			serviceName, err)
+		debug.PrintStack()
 		return make([]registry.ServiceInstance, 0)
 	}
 	iss := make([]registry.ServiceInstance, 0, len(criss))
@@ -194,7 +193,7 @@ func (zksd *zookeeperServiceDiscovery) GetInstances(serviceName string) []regist
 func (zksd *zookeeperServiceDiscovery) GetInstancesByPage(serviceName string, offset int, pageSize int) gxpage.Pager {
 	all := zksd.GetInstances(serviceName)
 	res := make([]any, 0, pageSize)
-	// could not use res = all[a:b] here because the res should be []any, not []ServiceInstance
+	// could not use res = all[a:b] here because the res should be []interface{}, not []ServiceInstance
 	for i := offset; i < len(all) && i < offset+pageSize; i++ {
 		res = append(res, all[i])
 	}
@@ -208,7 +207,7 @@ func (zksd *zookeeperServiceDiscovery) GetInstancesByPage(serviceName string, of
 func (zksd *zookeeperServiceDiscovery) GetHealthyInstancesByPage(serviceName string, offset int, pageSize int, healthy bool) gxpage.Pager {
 	all := zksd.GetInstances(serviceName)
 	res := make([]any, 0, pageSize)
-	// could not use res = all[a:b] here because the res should be []any, not []ServiceInstance
+	// could not use res = all[a:b] here because the res should be []interface{}, not []ServiceInstance
 	var (
 		i     = offset
 		count = 0

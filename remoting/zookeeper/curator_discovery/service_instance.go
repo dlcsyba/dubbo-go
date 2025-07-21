@@ -22,6 +22,7 @@ package curator_discovery
 type ServiceInstance struct {
 	Name                string `json:"name,omitempty"`
 	ID                  string `json:"id,omitempty"`
+	Catalog             string `json:"catalog,omitempty"`
 	Address             string `json:"address,omitempty"`
 	Port                int    `json:"port,omitempty"`
 	Payload             any    `json:"payload,omitempty"`

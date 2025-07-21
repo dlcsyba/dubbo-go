@@ -111,20 +111,19 @@ func (m *zookeeperMetadataReport) RegisterServiceAppMapping(key string, group st
 
 // GetServiceAppMapping get the app names from the specified Dubbo service interface
 func (m *zookeeperMetadataReport) GetServiceAppMapping(key string, group string, listener mapping.MappingListener) (*gxset.HashSet, error) {
-	path := m.rootDir + group + constant.PathSeparator + key
+	path := m.rootDir + key + constant.PathSeparator + "providers"
 
 	// listen to mapping changes first
 	if listener != nil {
 		m.cacheListener.AddListener(path, listener)
 	}
 
-	v, _, err := m.client.GetContent(path)
+	v, err := m.client.GetChildren(path)
 	if err != nil {
 		return nil, err
 	}
-	appNames := strings.Split(string(v), constant.CommaSeparator)
 	set := gxset.NewSet()
-	for _, e := range appNames {
+	for _, e := range v {
 		set.Add(e)
 	}
 	return set, nil

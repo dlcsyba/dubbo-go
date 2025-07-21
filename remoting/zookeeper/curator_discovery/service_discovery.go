@@ -19,24 +19,21 @@ package curator_discovery
 
 import (
 	"encoding/json"
+	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
-)
 
-import (
 	"github.com/dubbogo/go-zookeeper/zk"
 
 	gxzookeeper "github.com/dubbogo/gost/database/kv/zk"
 	"github.com/dubbogo/gost/log/logger"
 
-	perrors "github.com/pkg/errors"
-)
-
-import (
 	"dubbo.apache.org/dubbo-go/v3/common/constant"
 	"dubbo.apache.org/dubbo-go/v3/remoting"
 	"dubbo.apache.org/dubbo-go/v3/remoting/zookeeper"
+	perrors "github.com/pkg/errors"
 )
 
 // Entry contain a service instance
@@ -69,7 +66,7 @@ func NewServiceDiscovery(client *gxzookeeper.ZookeeperClient, basePath string) *
 
 // registerService register service to zookeeper
 func (sd *ServiceDiscovery) registerService(instance *ServiceInstance) error {
-	path := sd.pathForInstance(instance.Name, instance.ID)
+	path := sd.pathForInstance(instance.Name, instance.Catalog, instance.ID)
 	data, err := json.Marshal(instance)
 	if err != nil {
 		return err
@@ -114,7 +111,7 @@ func (sd *ServiceDiscovery) RegisterService(instance *ServiceInstance) error {
 		return err
 	}
 	if !loaded {
-		sd.ListenServiceInstanceEvent(instance.Name, instance.ID, sd)
+		sd.ListenServiceInstanceEvent(instance.Name, instance.Catalog, instance.ID, sd)
 	}
 	return nil
 }
@@ -137,7 +134,7 @@ func (sd *ServiceDiscovery) UpdateService(instance *ServiceInstance) error {
 	entry.Lock()
 	defer entry.Unlock()
 	entry.instance = instance
-	path := sd.pathForInstance(instance.Name, instance.ID)
+	path := sd.pathForInstance(instance.Name, instance.Catalog, instance.ID)
 
 	_, err = sd.client.SetContent(path, data, -1)
 	if err != nil {
@@ -147,7 +144,7 @@ func (sd *ServiceDiscovery) UpdateService(instance *ServiceInstance) error {
 }
 
 // updateInternalService update service in cache
-func (sd *ServiceDiscovery) updateInternalService(name, id string) {
+func (sd *ServiceDiscovery) updateInternalService(name, catg, id string) {
 	value, ok := sd.services.Load(id)
 	if !ok {
 		return
@@ -158,7 +155,7 @@ func (sd *ServiceDiscovery) updateInternalService(name, id string) {
 	}
 	entry.Lock()
 	defer entry.Unlock()
-	instance, err := sd.QueryForInstance(name, id)
+	instance, err := sd.QueryForInstance(name, catg, id)
 	if err != nil {
 		logger.Infof("[zkServiceDiscovery] UpdateInternalService{%s} error = err{%v}", id, err)
 		return
@@ -178,7 +175,7 @@ func (sd *ServiceDiscovery) UnregisterService(instance *ServiceInstance) error {
 
 // unregisterService un-register service in zookeeper
 func (sd *ServiceDiscovery) unregisterService(instance *ServiceInstance) error {
-	path := sd.pathForInstance(instance.Name, instance.ID)
+	path := sd.pathForInstance(instance.Name, instance.Catalog, instance.ID)
 	return sd.client.Delete(path)
 }
 
@@ -197,14 +194,14 @@ func (sd *ServiceDiscovery) ReRegisterServices() {
 			logger.Errorf("[zkServiceDiscovery] registerService{%s} error = err{%v}", instance.ID, perrors.WithStack(err))
 			return true
 		}
-		sd.ListenServiceInstanceEvent(instance.Name, instance.ID, sd)
+		sd.ListenServiceInstanceEvent(instance.Name, instance.Catalog, instance.ID, sd)
 		return true
 	})
 }
 
 // QueryForInstances query instances in zookeeper by name
 func (sd *ServiceDiscovery) QueryForInstances(name string) ([]*ServiceInstance, error) {
-	ids, err := sd.client.GetChildren(sd.pathForName(name))
+	catalogs, err := sd.client.GetChildren(sd.pathForName(name))
 	if err != nil {
 		return nil, err
 	}
@@ -212,28 +209,61 @@ func (sd *ServiceDiscovery) QueryForInstances(name string) ([]*ServiceInstance, 
 		instance  *ServiceInstance
 		instances []*ServiceInstance
 	)
-	for _, id := range ids {
-		instance, err = sd.QueryForInstance(name, id)
+
+	for _, catg := range catalogs {
+		ids, err := sd.client.GetChildren(sd.pathForCatalog(name, catg))
 		if err != nil {
 			return nil, err
 		}
-		instances = append(instances, instance)
+
+		for _, id := range ids {
+			instance, err = sd.QueryForInstance(name, catg, id)
+			if err != nil {
+				return nil, err
+			}
+			instances = append(instances, instance)
+		}
 	}
 	return instances, nil
 }
 
 // QueryForInstance query instances in zookeeper by name and id
-func (sd *ServiceDiscovery) QueryForInstance(name string, id string) (*ServiceInstance, error) {
-	path := sd.pathForInstance(name, id)
-	data, _, err := sd.client.GetContent(path)
+func (sd *ServiceDiscovery) QueryForInstance(name, catg, id string) (*ServiceInstance, error) {
+	decoded, err := url.QueryUnescape(id)
 	if err != nil {
 		return nil, err
 	}
-	instance := &ServiceInstance{}
-	err = json.Unmarshal(data, instance)
+
+	parsedURL, err := url.Parse(decoded)
 	if err != nil {
 		return nil, err
 	}
+
+	metadata := make(map[string]any)
+	params := parsedURL.Query()
+	for key, values := range params {
+		metadata[key] = values[0]
+	}
+
+	payload := make(map[string]any)
+	payload["metadata"] = metadata
+
+	instance := &ServiceInstance{
+		Name:    name,
+		Catalog: catg,
+		ID:      id,
+		Address: parsedURL.Host,
+		Payload: payload,
+	}
+
+	if len(parsedURL.Port()) > 0 {
+		intValue, err := strconv.Atoi(parsedURL.Port())
+		if err != nil {
+			return nil, err
+		}
+		instance.Port = intValue
+	}
+
 	return instance, nil
 }
 
@@ -248,38 +278,43 @@ func (sd *ServiceDiscovery) ListenServiceEvent(name string, listener remoting.Da
 }
 
 // ListenServiceInstanceEvent add a listener in an instance
-func (sd *ServiceDiscovery) ListenServiceInstanceEvent(name, id string, listener remoting.DataListener) {
-	sd.listener.ListenServiceNodeEvent(sd.pathForInstance(name, id), listener)
+func (sd *ServiceDiscovery) ListenServiceInstanceEvent(name, catg, id string, listener remoting.DataListener) {
+	sd.listener.ListenServiceNodeEvent(sd.pathForInstance(name, catg, id), listener)
 }
 
 // DataChange implement DataListener's DataChange function
 func (sd *ServiceDiscovery) DataChange(eventType remoting.Event) bool {
 	path := eventType.Path
-	name, id, err := sd.getNameAndID(path)
+	name, catg, id, err := sd.getNameAndID(path)
 	if err != nil {
 		logger.Errorf("[ServiceDiscovery] data change error = {%v}", err)
 		return true
 	}
-	sd.updateInternalService(name, id)
+	sd.updateInternalService(name, catg, id)
 	return true
 }
 
 // getNameAndID get service name and instance id by path
-func (sd *ServiceDiscovery) getNameAndID(path string) (string, string, error) {
+func (sd *ServiceDiscovery) getNameAndID(path string) (string, string, string, error) {
 	path = strings.TrimPrefix(path, sd.basePath)
 	path = strings.TrimPrefix(path, constant.PathSeparator)
 	pathSlice := strings.Split(path, constant.PathSeparator)
 	if len(pathSlice) < 2 {
-		return "", "", perrors.Errorf("[ServiceDiscovery] path{%s} dont contain name and id", path)
+		return "", "", "", perrors.Errorf("[ServiceDiscovery] path{%s} dont contain name and id", path)
 	}
 	name := pathSlice[0]
-	id := pathSlice[1]
-	return name, id, nil
+	catg := pathSlice[1]
+	id := pathSlice[2]
+	return name, catg, id, nil
 }
 
 // nolint
-func (sd *ServiceDiscovery) pathForInstance(name, id string) string {
-	return path.Join(sd.basePath, name, id)
+func (sd *ServiceDiscovery) pathForInstance(name, catalog, id string) string {
+	return path.Join(sd.basePath, name, catalog, id)
+}
+
+func (sd *ServiceDiscovery) pathForCatalog(name, catalog string) string {
+	return path.Join(sd.basePath, name, catalog)
 }
 
 // nolint

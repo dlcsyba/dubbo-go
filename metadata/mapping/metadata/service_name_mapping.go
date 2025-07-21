@@ -19,20 +19,15 @@ package metadata
 
 import (
 	"sync"
-)
 
-import (
 	gxset "github.com/dubbogo/gost/container/set"
 
-	perrors "github.com/pkg/errors"
-)
-
-import (
 	"dubbo.apache.org/dubbo-go/v3/common"
 	"dubbo.apache.org/dubbo-go/v3/common/constant"
 	"dubbo.apache.org/dubbo-go/v3/common/extension"
 	"dubbo.apache.org/dubbo-go/v3/metadata"
 	"dubbo.apache.org/dubbo-go/v3/metadata/mapping"
+	perrors "github.com/pkg/errors"
 )
 
 const (
@@ -93,7 +88,7 @@ func (d *ServiceNameMapping) Get(url *common.URL, listener mapping.MappingListen
 	if metadataReport == nil {
 		return nil, perrors.New("can not get mapping in remote cause no metadata report instance found")
 	}
-	return metadataReport.GetServiceAppMapping(serviceInterface, DefaultGroup, listener)
+	return metadataReport.GetServiceAppMapping(serviceInterface, "", listener)
 }
 
 func (d *ServiceNameMapping) Remove(url *common.URL) error {
